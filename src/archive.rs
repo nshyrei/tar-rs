@@ -17,7 +17,7 @@ use crate::{Entry, GnuExtSparseHeader, GnuSparseHeader, Header};
 ///
 /// This archive can have an entry added to it and it can be iterated over.
 pub struct Archive<R: ?Sized + Read> {
-    inner: ArchiveInner<R>,
+    pub inner: ArchiveInner<R>,
 }
 
 pub struct ArchiveInner<R: ?Sized> {
@@ -310,7 +310,7 @@ impl<'a> EntriesFields<'a> {
             size: size,
             header_pos: header_pos,
             file_pos: file_pos,
-            data: vec![EntryIo::Data((&self.archive.inner).take(size))],
+            data: vec![EntryIo::Pad(io::repeat(0).take(0))],
             header: header,
             long_pathname: None,
             long_linkname: None,
@@ -471,7 +471,7 @@ impl<'a> EntriesFields<'a> {
                          listed",
                     )
                 })?;
-                data.push(EntryIo::Data(reader.take(len)));
+                data.push(EntryIo::Pad(io::repeat(0).take(0)));
                 Ok(())
             };
             for block in gnu.sparse.iter() {

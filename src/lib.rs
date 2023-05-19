@@ -18,7 +18,7 @@
 //     all just super thin wrappers (e.g. easy to codegen).
 
 #![doc(html_root_url = "https://docs.rs/tar/0.4")]
-#![deny(missing_docs)]
+
 #![cfg_attr(test, deny(warnings))]
 
 use std::io::{Error, ErrorKind};
@@ -31,12 +31,12 @@ pub use crate::header::GnuExtSparseHeader;
 pub use crate::header::{GnuHeader, GnuSparseHeader, Header, HeaderMode, OldHeader, UstarHeader};
 pub use crate::pax::{PaxExtension, PaxExtensions};
 
-mod archive;
+pub mod archive;
 mod builder;
-mod entry;
+pub mod entry;
 mod entry_type;
 mod error;
-mod header;
+pub mod header;
 mod pax;
 
 fn other(msg: &str) -> Error {

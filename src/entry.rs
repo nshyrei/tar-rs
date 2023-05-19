@@ -21,7 +21,7 @@ use crate::{Archive, Header, PaxExtensions};
 /// be inspected. It acts as a file handle by implementing the Reader trait. An
 /// entry cannot be rewritten once inserted into an archive.
 pub struct Entry<'a, R: 'a + Read> {
-    fields: EntryFields<'a>,
+    pub fields: EntryFields<'a>,
     _ignored: marker::PhantomData<&'a Archive<R>>,
 }
 
@@ -45,7 +45,8 @@ pub struct EntryFields<'a> {
 
 pub enum EntryIo<'a> {
     Pad(io::Take<io::Repeat>),
-    Data(io::Take<&'a ArchiveInner<dyn Read + 'a>>),
+    //Data(io::Take<&'a ArchiveInner<dyn Read + 'a>>),
+    Data1(io::Take<std::io::Cursor<&'a [u8]>>),
 }
 
 /// When unpacking items the unpacked thing is returned to allow custom
@@ -363,7 +364,7 @@ impl<'a> EntryFields<'a> {
         )))
     }
 
-    fn unpack_in(&mut self, dst: &Path) -> io::Result<bool> {
+    pub fn unpack_in(&mut self, dst: &Path) -> io::Result<bool> {
         // Notes regarding bsdtar 2.8.3 / libarchive 2.8.3:
         // * Leading '/'s are trimmed. For example, `///test` is treated as
         //   `test`.
@@ -637,9 +638,17 @@ impl<'a> EntryFields<'a> {
             })?;
             for io in self.data.drain(..) {
                 match io {
-                    EntryIo::Data(mut d) => {
+                    /*EntryIo::Data(mut d) => {
                         let expected = d.limit();
-                        if io::copy(&mut d, &mut f)? != expected {
+                        let copy_res = io::copy(&mut d, &mut f)?;
+                        if copy_res != expected {
+                            return Err(other("failed to write entire file"));
+                        }
+                    }*/
+                    EntryIo::Data1(mut d) => {
+                        let expected = d.limit();
+                        let copy_res = io::copy(&mut d, &mut f)?;
+                        if copy_res != expected {
                             return Err(other("failed to write entire file"));
                         }
                     }
@@ -942,7 +951,8 @@ impl<'a> Read for EntryIo<'a> {
     fn read(&mut self, into: &mut [u8]) -> io::Result<usize> {
         match *self {
             EntryIo::Pad(ref mut io) => io.read(into),
-            EntryIo::Data(ref mut io) => io.read(into),
+            //EntryIo::Data(ref mut io) => io.read(into),
+            EntryIo::Data1(ref mut io) => io.read(into),
         }
     }
 }
