@@ -427,7 +427,7 @@ impl<'a> EntryFields<'a> {
         Ok(true)
     }
 
-    pub fn unpack_in_create_dirs(&mut self, dst: &Path) -> io::Result<bool> {
+    pub fn unpack_in_create_dirs(&self, dst: &Path) -> io::Result<bool> {
         // Notes regarding bsdtar 2.8.3 / libarchive 2.8.3:
         // * Leading '/'s are trimmed. For example, `///test` is treated as
         //   `test`.
@@ -967,13 +967,13 @@ impl<'a> EntryFields<'a> {
         let canon_parent = file_dst.canonicalize().map_err(|err| {
             Error::new(
                 err.kind(),
-                format!("{} while canonicalizing {}", err, file_dst.display()),
+                format!("{} while canonicalizing file {}", err, file_dst.display()),
             )
         })?;
         let canon_target = dst.canonicalize().map_err(|err| {
             Error::new(
                 err.kind(),
-                format!("{} while canonicalizing {}", err, dst.display()),
+                format!("{} while canonicalizing destination {}", err, dst.display()),
             )
         })?;
         if !canon_parent.starts_with(&canon_target) {
