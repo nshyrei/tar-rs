@@ -427,7 +427,70 @@ impl<'a> EntryFields<'a> {
         Ok(true)
     }
 
-    pub fn unpack_in_create_dirs(&self, dst: &Path) -> io::Result<bool> {
+    pub fn unpack_in2(&mut self, dst: &Path, canon_target: PathBuf) -> io::Result<bool> {
+        // Notes regarding bsdtar 2.8.3 / libarchive 2.8.3:
+        // * Leading '/'s are trimmed. For example, `///test` is treated as
+        //   `test`.
+        // * If the filename contains '..', then the file is skipped when
+        //   extracting the tarball.
+        // * '//' within a filename is effectively skipped. An error is
+        //   logged, but otherwise the effect is as if any two or more
+        //   adjacent '/'s within the filename were consolidated into one
+        //   '/'.
+        //
+        // Most of this is handled by the `path` module of the standard
+        // library, but we specially handle a few cases here as well.
+
+        let mut file_dst = dst.to_path_buf();
+        {
+            let path = self.path().map_err(|e| {
+                TarError::new(
+                    format!("invalid path in entry header: {}", self.path_lossy()),
+                    e,
+                )
+            })?;
+            for part in path.components() {
+                match part {
+                    // Leading '/' characters, root paths, and '.'
+                    // components are just ignored and treated as "empty
+                    // components"
+                    Component::Prefix(..) | Component::RootDir | Component::CurDir => continue,
+
+                    // If any part of the filename is '..', then skip over
+                    // unpacking the file to prevent directory traversal
+                    // security issues.  See, e.g.: CVE-2001-1267,
+                    // CVE-2002-0399, CVE-2005-1918, CVE-2007-4131
+                    Component::ParentDir => return Ok(false),
+
+                    Component::Normal(part) => file_dst.push(part),
+                }
+            }
+        }
+
+        // Skip cases where only slashes or '.' parts were seen, because
+        // this is effectively an empty filename.
+        if *dst == *file_dst {
+            return Ok(true);
+        }
+
+        // Skip entries without a parent (i.e. outside of FS root)
+        let parent = match file_dst.parent() {
+            Some(p) => p,
+            None => return Ok(false),
+        };
+
+        /*self.ensure_dir_created(&dst, parent)
+            .map_err(|e| TarError::new(format!("failed to create `{}`", parent.display()), e))?;*/
+
+        let canon_target = self.validate_inside_dst(&dst, parent)?;
+
+        self.unpack(Some(&canon_target), &file_dst)
+            .map_err(|e| TarError::new(format!("failed to unpack `{}`", file_dst.display()), e))?;
+
+        Ok(true)
+    }
+
+    pub fn unpack_in_create_dirs2(&self, dst: &Path) -> io::Result<bool> {
         // Notes regarding bsdtar 2.8.3 / libarchive 2.8.3:
         // * Leading '/'s are trimmed. For example, `///test` is treated as
         //   `test`.
@@ -483,6 +546,66 @@ impl<'a> EntryFields<'a> {
             .map_err(|e| TarError::new(format!("failed to create `{}`", parent.display()), e))?;
 
         Ok(true)
+    }
+
+    pub fn unpack_in_create_dirs(&self, dst: &Path) -> io::Result<(bool, PathBuf)> {
+        // Notes regarding bsdtar 2.8.3 / libarchive 2.8.3:
+        // * Leading '/'s are trimmed. For example, `///test` is treated as
+        //   `test`.
+        // * If the filename contains '..', then the file is skipped when
+        //   extracting the tarball.
+        // * '//' within a filename is effectively skipped. An error is
+        //   logged, but otherwise the effect is as if any two or more
+        //   adjacent '/'s within the filename were consolidated into one
+        //   '/'.
+        //
+        // Most of this is handled by the `path` module of the standard
+        // library, but we specially handle a few cases here as well.
+
+        let mut file_dst = dst.to_path_buf();
+        {
+            let path = self.path().map_err(|e| {
+                TarError::new(
+                    format!("invalid path in entry header: {}", self.path_lossy()),
+                    e,
+                )
+            })?;
+            for part in path.components() {
+                match part {
+                    // Leading '/' characters, root paths, and '.'
+                    // components are just ignored and treated as "empty
+                    // components"
+                    Component::Prefix(..) | Component::RootDir | Component::CurDir => continue,
+
+                    // If any part of the filename is '..', then skip over
+                    // unpacking the file to prevent directory traversal
+                    // security issues.  See, e.g.: CVE-2001-1267,
+                    // CVE-2002-0399, CVE-2005-1918, CVE-2007-4131
+                    Component::ParentDir => return Ok((false, PathBuf::new())),
+
+                    Component::Normal(part) => file_dst.push(part),
+                }
+            }
+        }
+
+        // Skip cases where only slashes or '.' parts were seen, because
+        // this is effectively an empty filename.
+        if *dst == *file_dst {
+            return Ok((true, PathBuf::new()));
+        }
+
+        // Skip entries without a parent (i.e. outside of FS root)
+        let parent = match file_dst.parent() {
+            Some(p) => p,
+            None => return Ok((false, PathBuf::new())),
+        };
+
+        self.ensure_dir_created(&dst, parent)
+            .map_err(|e| TarError::new(format!("failed to create `{}`", parent.display()), e))?;
+
+        let canon_target = self.validate_inside_dst(&dst, parent)?;
+
+        Ok((true, canon_target))
     }
 
     /// Unpack as destination directory `dst`.
@@ -581,7 +704,7 @@ impl<'a> EntryFields<'a> {
                     // so we need to validate at this time.
                     Some(ref p) => {
                         let link_src = p.join(src);
-                        self.validate_inside_dst(p, &link_src)?;
+                        self.validate_inside_dst2(p, &link_src)?;
                         link_src
                     }
                     None => src.into_owned(),
@@ -957,6 +1080,7 @@ impl<'a> EntryFields<'a> {
             if let Some(parent) = ancestor.parent() {
                 self.validate_inside_dst(dst, parent)?;
             }
+            println!("Creating dir {:?}", ancestor);
             fs::create_dir_all(ancestor)?;
         }
         Ok(())
@@ -984,6 +1108,34 @@ impl<'a> EntryFields<'a> {
                 ),
                 // TODO: use ErrorKind::InvalidInput here? (minor breaking change)
                 Error::new(ErrorKind::Other, "Invalid argument"),
+            );
+            return Err(err.into());
+        }
+        Ok(canon_target)
+    }
+
+    fn validate_inside_dst2(&self, dst: &Path, file_dst: &Path) -> io::Result<PathBuf> {
+        // Abort if target (canonical) parent is outside of `dst`
+        let canon_parent = file_dst.canonicalize().map_err(|err| {
+            Error::new(
+                err.kind(),
+                format!("{} while canonicalizing file DURING UNPAKC {}", err, file_dst.display()),
+            )
+        })?;
+        let canon_target = dst.canonicalize().map_err(|err| {
+            Error::new(
+                err.kind(),
+                format!("{} while canonicalizing destination DURING UNPAKC {}", err, dst.display()),
+            )
+        })?;
+        if !canon_parent.starts_with(&canon_target) {
+            let err = TarError::new(
+                format!(
+                    "trying to unpack outside of destination path DURING UNPAKC : {}",
+                    canon_target.display()
+                ),
+                // TODO: use ErrorKind::InvalidInput here? (minor breaking change)
+                Error::new(ErrorKind::Other, "Invalid argument DURING UNPAKC"),
             );
             return Err(err.into());
         }
